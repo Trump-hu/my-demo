@@ -6,6 +6,7 @@ import robotRoutes from './robot.routes.js';
 import taskRoutes from './task.routes.js';
 import recordRoutes from './record.routes.js';
 import roleRoutes from './role.routes.js';
+import uploadRoutes from './upload.routes.js';
 
 const router = Router();
 
@@ -55,6 +56,15 @@ router.get('/', (req, res) => {
         delete: 'DELETE /api/role/delete/:id (需登录)',
         permissionTree: 'GET /api/role/permissionTree (需登录)',
       },
+      upload: {
+        check: 'POST /api/upload/check (需登录)',
+        progress: 'GET /api/upload/progress (需登录)',
+        chunk: 'POST /api/upload/chunk (需登录)',
+        merge: 'POST /api/upload/merge (需登录)',
+        list: 'GET /api/upload/list (需登录)',
+        download: 'GET /api/upload/download/:id (需登录)',
+        delete: 'DELETE /api/upload/delete/:id (需登录)',
+      },
       health: 'GET /health',
     },
   });
@@ -68,5 +78,6 @@ router.use('/', robotRoutes);
 router.use('/', taskRoutes);
 router.use('/', recordRoutes);
 router.use('/', roleRoutes);
+router.use('/', uploadRoutes);
 
 export default router;

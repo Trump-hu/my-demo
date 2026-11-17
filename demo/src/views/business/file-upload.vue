@@ -61,8 +61,9 @@
         <el-tag type="warning" effect="light">核心演示</el-tag>
       </div>
       <p class="card-tip">
-        选择本地文件或生成一个模拟大文件，配置切片大小与并发数。流程：Web Worker 计算文件指纹 → 秒传检查 →
-        并发分片上传 → 失败自动重试 → 暂停后继续（已完成的分片会跳过，实现断点续传）。
+        选择本地文件或生成一个模拟大文件，配置切片大小与并发数。流程：Web Worker 计算文件指纹 →
+        请求后端做秒传/断点续传检查 → 并发上传分片（真实请求 /api/upload/chunk，失败自动重试）→
+        暂停后继续（服务端已保存的分片会跳过）→ 合并分片（/api/upload/merge）。
       </p>
 
       <!-- 配置区 -->
@@ -119,12 +120,17 @@
 
       <!-- 操作按钮 -->
       <div v-if="file" class="actions mt-16">
-        <el-button type="primary" :disabled="!canStart || uploading" :loading="hashing" @click="start">
-          {{ hashing ? '计算指纹中…' : '开始上传' }}
+        <el-button
+          type="primary"
+          :disabled="!canStart || uploading || merging"
+          :loading="hashing || merging"
+          @click="start"
+        >
+          {{ merging ? '合并中…' : hashing ? '计算指纹中…' : '开始上传' }}
         </el-button>
         <el-button type="warning" :disabled="!uploading" @click="pause">暂停</el-button>
-        <el-button type="success" :disabled="!paused" @click="resume">继续</el-button>
-        <el-button :disabled="!file || (uploading && !paused)" @click="reset()">重置</el-button>
+        <el-button type="success" :disabled="!paused || merging" @click="resume">继续</el-button>
+        <el-button :disabled="!file || merging || (uploading && !paused)" @click="reset()">重置</el-button>
       </div>
 
       <!-- 状态提示 -->
@@ -175,6 +181,7 @@
 import { ref, computed, shallowRef, watch, onBeforeUnmount } from 'vue'
 import { UploadFilled, Upload, Document, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { checkUpload, uploadChunk, mergeUpload } from '@/api/upload'
 
 // ===== 方法对比数据 =====
 const scenarios = ['切片上传', '断点续传', '并发上传', '秒传', 'Web Worker 计算指纹']
@@ -204,6 +211,7 @@ const uploading = ref(false)
 const paused = ref(false)
 const completed = ref(false)
 const instantHit = ref(false)
+const merging = ref(false)
 
 const hashStatus = computed(() => (fileHash.value ? 'ok' : hashing.value ? 'loading' : 'pending'))
 const hashDisplay = computed(() => {
@@ -238,68 +246,8 @@ const formatSize = (bytes) => {
   return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB'
 }
 
-// ===== 持久化（模拟服务端记录，用 localStorage 以便刷新后仍可续传）=====
-const LS_PREFIX = 'fu_uploaded_' // 已完成分片：fu_uploaded_<hash>_<chunkSize>
-const LS_INSTANT = 'fu_instant' // 秒传记录：{ [hash]: 时间戳 }
-const LS_INDEX = 'fu_index' // 所有数据 key 的最近使用时间，用于清理
-const LS_TTL = 7 * 24 * 60 * 60 * 1000
-const LS_MAX_KEYS = 20
-
-const lsGetMap = (key) => {
-  try {
-    const v = JSON.parse(localStorage.getItem(key) || '{}')
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
-  } catch {
-    return {}
-  }
-}
-const lsSaveMap = (key, map) => localStorage.setItem(key, JSON.stringify(map))
-
-const touchKey = (key) => {
-  const idx = lsGetMap(LS_INDEX)
-  idx[key] = Date.now()
-  lsSaveMap(LS_INDEX, idx)
-}
-
-// 分片布局与切片大小相关，key 中带上 chunkSize，避免修改切片大小后复用旧记录
-const uploadedKey = (hash) => `${LS_PREFIX}${hash}_${chunkSize.value}`
-const getUploadedChunks = (hash) => new Set(Object.keys(lsGetMap(uploadedKey(hash))).map(Number))
-const saveUploadedChunk = (hash, index) => {
-  const key = uploadedKey(hash)
-  const map = lsGetMap(key)
-  map[index] = Date.now()
-  lsSaveMap(key, map)
-  touchKey(key)
-}
-const isInstant = (hash) => !!lsGetMap(LS_INSTANT)[hash]
-const markInstant = (hash) => {
-  const map = lsGetMap(LS_INSTANT)
-  map[hash] = Date.now()
-  lsSaveMap(LS_INSTANT, map)
-  touchKey(LS_INSTANT)
-}
-
-// 清理过期记录，并限制 localStorage 中最多保留 LS_MAX_KEYS 条数据 key
-const cleanupStorage = () => {
-  const idx = lsGetMap(LS_INDEX)
-  const now = Date.now()
-  Object.keys(idx).forEach((key) => {
-    if (now - idx[key] > LS_TTL || localStorage.getItem(key) === null) {
-      localStorage.removeItem(key)
-      delete idx[key]
-    }
-  })
-  const keys = Object.keys(idx)
-  keys
-    .sort((a, b) => idx[a] - idx[b])
-    .slice(0, Math.max(0, keys.length - LS_MAX_KEYS))
-    .forEach((key) => {
-      localStorage.removeItem(key)
-      delete idx[key]
-    })
-  lsSaveMap(LS_INDEX, idx)
-}
-cleanupStorage()
+// ===== 服务端状态 =====
+// 秒传与断点续传状态由后端维护（/api/upload/check 返回已上传分片）
 
 // ===== 文件选择 / 生成 =====
 const pickFile = () => fileInputRef.value && fileInputRef.value.click()
@@ -309,9 +257,11 @@ const onFileChange = (e) => {
   e.target.value = ''
 }
 
-// 轻量"虚拟大文件"：size 与真实体积一致，slice 时才生成数据且单次最多 1MB
-// （指纹抽样每段仅 64KB，上传流程只模拟进度不读取内容），避免真实占用几百 MB 内存
-const VIRTUAL_SLICE_LIMIT = 1024 * 1024
+// 轻量"虚拟大文件"：size 与真实体积一致，slice 时才按需生成数据，不预先占用内存
+const PATTERN_LEN = 251
+const FILE_PATTERN = new Uint8Array(PATTERN_LEN)
+for (let i = 0; i < PATTERN_LEN; i++) FILE_PATTERN[i] = i
+
 class VirtualFile {
   constructor(name, size) {
     this.name = name
@@ -323,10 +273,16 @@ class VirtualFile {
   slice(start = 0, end = this.size) {
     const from = Math.max(0, Math.min(start, this.size))
     const to = Math.max(from, Math.min(end, this.size))
-    const len = Math.min(to - from, VIRTUAL_SLICE_LIMIT)
+    const len = to - from
     const buf = new Uint8Array(len)
-    // 内容与文件内偏移绑定，保证不同位置的采样结果不同
-    for (let i = 0; i < len; i++) buf[i] = (from + i) % 251
+    // 内容只与文件内绝对偏移有关（位置 % 251），与 Worker 中的生成逻辑保持一致
+    let offset = 0
+    while (offset < len) {
+      const shift = (from + offset) % PATTERN_LEN
+      const take = Math.min(PATTERN_LEN - shift, len - offset)
+      buf.set(FILE_PATTERN.subarray(shift, shift + take), offset)
+      offset += take
+    }
     return new Blob([buf], { type: this.type })
   }
 }
@@ -405,59 +361,73 @@ const computeHash = () =>
 // ===== 上传流程 =====
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// 模拟单个分片上传：本次尝试是否失败在开始时确定，失败发生在随机进度点
-const uploadOne = (chunk, hash, isCanceled) =>
-  new Promise((resolve) => {
-    chunk.status = 'uploading'
-    let timer = null
-    let p = chunk.progress || 0
-    const willFail = failRate.value > 0 && Math.random() * 100 < failRate.value
-    const failAt = 60 + Math.random() * 40 // 60%~100% 之间失败，更接近真实网络中断
-    const settle = (result) => {
-      if (timer) clearTimeout(timer)
-      timer = null
-      resolve(result)
-    }
-    const tick = () => {
-      timer = null
-      if (isCanceled()) {
-        // 暂停/取消时回退为待上传，已推进的进度保留，继续时从该进度接着传
-        chunk.status = 'pending'
-        return settle('paused')
-      }
-      p = Math.min(100, p + Math.random() * 18 + 4)
-      chunk.progress = p
-      if (willFail && p >= failAt) {
-        chunk.status = 'error'
-        return settle('error')
-      }
-      if (p >= 100) {
-        chunk.status = 'success'
-        saveUploadedChunk(hash, chunk.index)
-        return settle('success')
-      }
-      timer = setTimeout(tick, 40)
-    }
-    timer = setTimeout(tick, 40)
-  })
+const toBytes = (mb) => mb * 1024 * 1024
 
-// 带重试的分片上传：失败后进度归零重新开始，最多重试 2 次
+// 正在进行的分片请求，暂停 / 重置时统一中断
+const activeControllers = new Set()
+const abortActiveRequests = () => {
+  activeControllers.forEach((c) => c.abort())
+  activeControllers.clear()
+}
+
+// 上传单个分片：真实请求 /api/upload/chunk，由 axios 的 onUploadProgress 驱动进度
+const uploadOne = async (chunk, hash, isCanceled) => {
+  if (isCanceled()) return 'canceled'
+  // 模拟失败率：发请求前主动失败一次，用于演示失败重试
+  if (failRate.value > 0 && Math.random() * 100 < failRate.value) {
+    chunk.status = 'error'
+    return 'error'
+  }
+
+  const controller = new AbortController()
+  activeControllers.add(controller)
+  chunk.status = 'uploading'
+  chunk.progress = 0
+  try {
+    await uploadChunk({
+      hash,
+      index: chunk.index,
+      totalChunks: chunkList.value.length,
+      chunkSize: toBytes(chunkSize.value),
+      fileName: file.value.name,
+      fileSize: file.value.size,
+      blob: file.value.slice(chunk.start, chunk.end),
+      signal: controller.signal,
+      onProgress: (p) => {
+        chunk.progress = Math.max(chunk.progress, p)
+      },
+    })
+    chunk.progress = 100
+    chunk.status = 'success'
+    return 'success'
+  } catch (e) {
+    if (isCanceled() || controller.signal.aborted) {
+      // 暂停时中断的分片服务端不会保留，继续时需重新上传
+      chunk.status = 'pending'
+      chunk.progress = 0
+      return 'paused'
+    }
+    chunk.status = 'error'
+    return 'error'
+  } finally {
+    activeControllers.delete(controller)
+  }
+}
+
+// 带重试的分片上传：失败后最多重试 2 次
 const uploadWithRetry = async (chunk, hash, isCanceled) => {
   const maxRetry = 2
   for (let attempt = 0; attempt <= maxRetry; attempt++) {
-    if (isCanceled()) return 'canceled'
     if (attempt > 0) {
       chunk.progress = 0
       chunk.status = 'pending'
       await sleep(300)
-      if (isCanceled()) return 'canceled'
     }
+    if (isCanceled()) return 'canceled'
     chunk.retries = attempt
     const result = await uploadOne(chunk, hash, isCanceled)
-    if (result === 'success') return 'success'
-    if (result === 'paused') return 'paused'
+    if (result !== 'error') return result
   }
-  chunk.status = 'error'
   return 'error'
 }
 
@@ -500,16 +470,31 @@ const start = async () => {
     fileHash.value = hash
   }
 
-  // 2. 秒传检查
-  if (isInstant(fileHash.value)) {
+  // 2. 秒传 + 断点续传检查（真实请求后端）
+  let remote
+  try {
+    const res = await checkUpload({
+      hash: fileHash.value,
+      fileName: file.value.name,
+      fileSize: file.value.size,
+      chunkSize: toBytes(chunkSize.value),
+    })
+    remote = res.data || {}
+  } catch (e) {
+    // 错误提示已由 request 拦截器统一弹出
+    return
+  }
+  if (myRun !== runToken) return
+
+  if (remote.exists) {
     instantHit.value = true
     chunkList.value.forEach((c) => { c.status = 'skipped'; c.progress = 100 })
     ElMessage.success('秒传成功：服务端已存在相同文件')
     return
   }
 
-  // 3. 断点续传：已完成分片置 skipped；失败的分片从 0 重来，暂停中断的分片保留进度
-  const uploaded = getUploadedChunks(fileHash.value)
+  // 3. 断点续传：服务端已保存的分片直接跳过
+  const uploaded = new Set(remote.uploadedChunks || [])
   chunkList.value.forEach((c) => {
     if (uploaded.has(c.index)) {
       c.status = 'skipped'
@@ -528,22 +513,33 @@ const start = async () => {
   if (myRun !== runToken) return // 已被重置/新任务接管，不要改动状态
   uploading.value = false
 
-  // 5. 结果处理
+  // 5. 结果处理：全部分片就绪后请求合并
   if (paused.value) return
   const hasError = chunkList.value.some((c) => c.status === 'error')
+  if (hasError) {
+    ElMessage.error('分片上传失败，可点击"继续"重试失败分片')
+    return
+  }
   const allDone = chunkList.value.every((c) => c.status === 'success' || c.status === 'skipped')
-  if (allDone) {
+  if (!allDone || !chunkList.value.length) return
+
+  merging.value = true
+  try {
+    await mergeUpload(fileHash.value)
+    if (myRun !== runToken) return
     completed.value = true
-    markInstant(fileHash.value) // 记录指纹，下次同文件可秒传
     ElMessage.success('上传完成')
-  } else if (hasError) {
-    ElMessage.error('部分分片上传失败，可点击"继续"重试失败分片')
+  } catch (e) {
+    // 错误提示已由 request 拦截器统一弹出
+  } finally {
+    if (myRun === runToken) merging.value = false
   }
 }
 
 const pause = () => {
   paused.value = true
-  ElMessage.info('已暂停，已完成分片将被保留')
+  abortActiveRequests()
+  ElMessage.info('已暂停，已完成的分片会被保留')
 }
 const resume = () => {
   paused.value = false
@@ -552,7 +548,9 @@ const resume = () => {
 const reset = (silent = false) => {
   runToken++ // 作废进行中的上传流程
   abortHash()
+  abortActiveRequests()
   uploading.value = false
+  merging.value = false
   paused.value = false
   hashing.value = false
   completed.value = false
@@ -573,6 +571,7 @@ watch(chunkSize, () => {
 onBeforeUnmount(() => {
   runToken++
   abortHash()
+  abortActiveRequests()
 })
 </script>
 

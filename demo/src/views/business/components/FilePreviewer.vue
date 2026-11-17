@@ -1,7 +1,7 @@
 <template>
   <div class="file-previewer">
     <!-- 工具栏 -->
-    <div class="toolbar">
+    <div v-if="showToolbar" class="toolbar">
       <el-button type="primary" @click="pickFile">
         <el-icon><Upload /></el-icon>选择文件
       </el-button>
@@ -152,12 +152,18 @@
 </template>
 
 <script setup>
-import { ref, computed, shallowRef, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, shallowRef, watch, onBeforeUnmount, nextTick } from 'vue'
 import 'highlight.js/styles/github.css'
 import {
   Upload, FolderOpened, Folder, ArrowRight, Document, Download,
   CircleClose, Files, Loading, Warning, Tickets, VideoPlay,
 } from '@element-plus/icons-vue'
+
+const props = defineProps({
+  // 外部传入文件时可直接预览（如上传记录页的预览弹窗）
+  initialFile: { type: Object, default: null },
+  showToolbar: { type: Boolean, default: true },
+})
 
 const fileInputRef = ref(null)
 const folderInputRef = ref(null)
@@ -497,6 +503,18 @@ const clear = () => {
   currentPath.value = ''
   category.value = 'other'
 }
+
+// 外部（如上传记录页）传入文件时自动预览，换文件时重新解析
+watch(
+  () => props.initialFile,
+  (f) => {
+    if (f) previewFile(f)
+    else clear()
+  },
+  { immediate: true },
+)
+
+defineExpose({ previewFile, clear })
 
 onBeforeUnmount(() => {
   if (previewSrc.value) URL.revokeObjectURL(previewSrc.value)

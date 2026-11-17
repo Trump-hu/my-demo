@@ -14,6 +14,7 @@ import '../models/robot.model.js';
 import '../models/task.model.js';
 import '../models/record.model.js';
 import '../models/role.model.js';
+import '../models/upload.model.js';
 
 async function ensureDatabase() {
   const conn = await mysql.createConnection({

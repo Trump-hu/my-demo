@@ -165,6 +165,20 @@ const routes = [
           groupIcon: 'Briefcase',
         },
       },
+      {
+        path: 'business/upload-list',
+        name: 'UploadList',
+        component: () => import('@/views/business/upload-list.vue'),
+        meta: {
+          title: '上传记录',
+          icon: 'Files',
+          requiresAuth: true,
+          cacheable: true,
+          menuGroup: 'Business',
+          groupTitle: '业务场景',
+          groupIcon: 'Briefcase',
+        },
+      },
     ],
   },
   {

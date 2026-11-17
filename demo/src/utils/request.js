@@ -30,12 +30,14 @@ request.interceptors.response.use(
   (response) => {
     const res = response.data
     if (res.code && res.code !== 200) {
-      ElMessage.error(res.message || '请求失败')
+      // silent: 由调用方自行处理错误（如分片上传失败后重试）
+      if (!response.config.silent) ElMessage.error(res.message || '请求失败')
       return Promise.reject(new Error(res.message || '请求失败'))
     }
     return res
   },
   (error) => {
+    const silent = error.config?.silent === true
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
@@ -51,14 +53,16 @@ request.interceptors.response.use(
             isHandling401 = false
           }, 1000)
         }
-      } else if (status === 403) {
-        ElMessage.error('没有权限访问该资源')
-      } else if (status === 500) {
-        ElMessage.error('服务器内部错误')
-      } else {
-        ElMessage.error(error.response.data?.message || '网络错误')
+      } else if (!silent) {
+        if (status === 403) {
+          ElMessage.error('没有权限访问该资源')
+        } else if (status === 500) {
+          ElMessage.error('服务器内部错误')
+        } else {
+          ElMessage.error(error.response.data?.message || '网络错误')
+        }
       }
-    } else {
+    } else if (!silent) {
       ElMessage.error('网络连接异常')
     }
     return Promise.reject(error)

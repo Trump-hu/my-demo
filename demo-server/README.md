@@ -32,7 +32,8 @@ demo-server/
     │   ├── robot.model.js
     │   ├── task.model.js
     │   ├── record.model.js
-    │   └── role.model.js
+    │   ├── role.model.js
+    │   └── upload.model.js
     ├── routes/           # 路由
     │   ├── index.js      # 路由汇总
     │   ├── auth.routes.js
@@ -41,7 +42,8 @@ demo-server/
     │   ├── robot.routes.js
     │   ├── task.routes.js
     │   ├── record.routes.js
-    │   └── role.routes.js
+    │   ├── role.routes.js
+    │   └── upload.routes.js
     ├── controllers/      # 控制器
     ├── services/         # 业务逻辑
     ├── middlewares/      # auth / validate / error
@@ -182,6 +184,51 @@ npm start            # 生产模式
 | POST   | /api/role/save                 | 新增/更新  | 登录 |
 | DELETE | /api/role/delete/:id           | 删除角色   | 登录 |
 | GET    | /api/role/permissionTree       | 权限树     | 登录 |
+
+### 文件上传（切片上传 / 断点续传 / 秒传）
+
+| 方法   | 路径                          | 说明                       | 权限 |
+|--------|-------------------------------|----------------------------|------|
+| POST   | /api/upload/check             | 秒传 & 断点续传检查        | 登录 |
+| GET    | /api/upload/progress          | 查询已上传分片             | 登录 |
+| POST   | /api/upload/chunk             | 上传单个分片               | 登录 |
+| POST   | /api/upload/merge             | 合并分片                   | 登录 |
+| GET    | /api/upload/list              | 上传记录列表               | 登录 |
+| GET    | /api/upload/download/:id      | 下载合并后的文件           | 登录 |
+| DELETE | /api/upload/delete/:id        | 删除记录及文件             | 登录 |
+
+调用流程：
+
+1. `POST /api/upload/check`，body `{ hash, fileName, fileSize, chunkSize }`。
+   返回 `data.exists = true` 表示秒传；否则用 `data.uploadedChunks` 跳过已上传分片。
+2. 对未上传的分片调用 `POST /api/upload/chunk?hash=&index=&totalChunks=&chunkSize=&fileName=&fileSize=`，
+   请求体为二进制原始字节（`Content-Type: application/octet-stream`），分片可并发上传。
+3. 全部分片完成后调用 `POST /api/upload/merge`，body `{ hash }`，服务端按序号拼装文件。
+
+示例（curl）：
+
+```bash
+# 1. 检查
+curl -X POST http://localhost:3000/api/upload/check \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"hash":"<file-hash>","fileName":"demo.bin","fileSize":10485760,"chunkSize":5242880}'
+
+# 2. 上传第 0 个分片
+curl -X POST "http://localhost:3000/api/upload/chunk?hash=<file-hash>&index=0&totalChunks=2&chunkSize=5242880&fileName=demo.bin&fileSize=10485760" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/octet-stream" \
+  --data-binary @part0.part
+
+# 3. 合并
+curl -X POST http://localhost:3000/api/upload/merge \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"hash":"<file-hash>"}'
+```
+
+文件存储：
+
+- 分片临时文件：`uploads/tmp/<hash>/<index>.part`
+- 合并后的文件：`uploads/files/<hash>/<fileName>`
+- 存储根目录可通过 `.env` 中的 `UPLOAD_DIR` 配置，大小限制见 `UPLOAD_MAX_FILE_SIZE` / `UPLOAD_MAX_CHUNK_SIZE`
 
 ### 其他
 
