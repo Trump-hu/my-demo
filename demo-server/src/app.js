@@ -13,7 +13,7 @@ function createApp() {
   // 安全 & 基础中间件
   app.use(helmet());
   app.use(cors());
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({ limit: '30mb' })); // 图片合成保存时配置中含 base64 图片，需要更大的请求体上限
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // 日志

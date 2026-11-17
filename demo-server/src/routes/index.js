@@ -7,6 +7,7 @@ import taskRoutes from './task.routes.js';
 import recordRoutes from './record.routes.js';
 import roleRoutes from './role.routes.js';
 import uploadRoutes from './upload.routes.js';
+import imageTemplateRoutes from './image-template.routes.js';
 
 const router = Router();
 
@@ -65,6 +66,14 @@ router.get('/', (req, res) => {
         download: 'GET /api/upload/download/:id (需登录)',
         delete: 'DELETE /api/upload/delete/:id (需登录)',
       },
+      imageTemplate: {
+        list: 'GET /api/image-template/list (需登录)',
+        detail: 'GET /api/image-template/detail/:id (需登录)',
+        save: 'POST /api/image-template/save (需登录)',
+        copy: 'POST /api/image-template/copy/:id (需登录)',
+        delete: 'DELETE /api/image-template/delete/:id (需登录)',
+        preview: 'GET /api/image-template/preview/:id (需登录)',
+      },
       health: 'GET /health',
     },
   });
@@ -79,5 +88,6 @@ router.use('/', taskRoutes);
 router.use('/', recordRoutes);
 router.use('/', roleRoutes);
 router.use('/', uploadRoutes);
+router.use('/', imageTemplateRoutes);
 
 export default router;

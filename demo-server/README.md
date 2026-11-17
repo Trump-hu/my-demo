@@ -33,7 +33,8 @@ demo-server/
     │   ├── task.model.js
     │   ├── record.model.js
     │   ├── role.model.js
-    │   └── upload.model.js
+    │   ├── upload.model.js
+    │   └── image-template.model.js
     ├── routes/           # 路由
     │   ├── index.js      # 路由汇总
     │   ├── auth.routes.js
@@ -43,7 +44,8 @@ demo-server/
     │   ├── task.routes.js
     │   ├── record.routes.js
     │   ├── role.routes.js
-    │   └── upload.routes.js
+    │   ├── upload.routes.js
+    │   └── image-template.routes.js
     ├── controllers/      # 控制器
     ├── services/         # 业务逻辑
     ├── middlewares/      # auth / validate / error
@@ -229,6 +231,46 @@ curl -X POST http://localhost:3000/api/upload/merge \
 - 分片临时文件：`uploads/tmp/<hash>/<index>.part`
 - 合并后的文件：`uploads/files/<hash>/<fileName>`
 - 存储根目录可通过 `.env` 中的 `UPLOAD_DIR` 配置，大小限制见 `UPLOAD_MAX_FILE_SIZE` / `UPLOAD_MAX_CHUNK_SIZE`
+
+### 图片合成
+
+| 方法   | 路径                              | 说明                         | 权限 |
+|--------|-----------------------------------|------------------------------|------|
+| GET    | /api/image-template/list          | 合成记录列表（按名称查询）   | 登录 |
+| GET    | /api/image-template/detail/:id    | 合成详情（含底图/插画/文字配置） | 登录 |
+| POST   | /api/image-template/save          | 新增 / 更新合成记录          | 登录 |
+| POST   | /api/image-template/copy/:id      | 一键复制合成记录             | 登录 |
+| DELETE | /api/image-template/delete/:id    | 删除合成记录及预览图         | 登录 |
+| GET    | /api/image-template/preview/:id   | 获取合成预览图               | 登录 |
+
+保存接口 body 示例：
+
+```json
+{
+  "id": 1,
+  "name": "合成图片",
+  "type": "图片",
+  "width": 1200,
+  "height": 800,
+  "quality": 90,
+  "config": {
+    "base": "data:image/jpeg;base64,...（可为 null，表示空白底图）",
+    "illustrations": [
+      { "type": "image", "src": "data:image/png;base64,...", "x": { "value": 10, "unit": "%" }, "y": { "value": 10, "unit": "%" }, "width": { "value": 20, "unit": "%" } },
+      { "type": "emoji", "emoji": "🎉", "x": { "value": 50, "unit": "%" }, "y": { "value": 50, "unit": "%" }, "width": { "value": 8, "unit": "%" } }
+    ],
+    "texts": [
+      { "content": "示例文字", "fontSize": 36, "color": "#2c3e50", "bold": true, "italic": false, "x": { "value": 10, "unit": "%" }, "y": { "value": 10, "unit": "%" } }
+    ]
+  },
+  "preview": "data:image/jpeg;base64,...（合成结果预览图）"
+}
+```
+
+- 配置中的底图 / 插画以 dataURL 保存，单次请求体上限 30MB（见 `src/app.js`）
+- `type` 支持 `图片 / 草稿 / 海报 / 图标 / 其他`，列表接口可按 `type` 过滤
+- 列表与详情额外返回 `creatorName`、`updaterName`（根据用户表解析，缺失时回退为用户 ID）
+- 预览图保存于 `uploads/image-templates/<id>/preview.jpg`，列表接口不返回大字段
 
 ### 其他
 
